@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<title>tab shack</title>
+<!-- 2015-03-29 Sun 14:16 -->
+<meta  http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta  name="generator" content="Org-mode" />
+<link rel="stylesheet" type="text/css" href="../css/style.css" />
+</head>
+<body>
+<div id="content">
+<h1 class="title">tab shack</h1>
+<ul class="org-ul">
+<li><a href="../index.html">home</a>
+</li>
+<li><a href="https://github.com/jeypolanco/">github</a>
+</li>
+</ul>
+<div id="outline-container-sec-1" class="outline-2">
+<h2 id="sec-1">exploring an os: freedos's interrupt vector table</h2>
+<div class="outline-text-2" id="text-1">
+<p>
+In this series, I'll be exploring different operating systems and
+breaking down important data structures that underpin their kernels.
+For the sake of simplicity, I'll start with the modern day equivalent of
+DOS (i.e. freedos) and in later post proceed to more advanced systems
+and kernels.  With that said lets get started.
+</p>
+</div>
+
+<div id="outline-container-sec-1-1" class="outline-3">
+<h3 id="sec-1-1">assumptions</h3>
+<div class="outline-text-3" id="text-1-1">
+<p>
+This is a fairly technical post so before venturing forward here a few
+topics you should be familiar with.  
+</p>
+<ul class="org-ul">
+<li>I'll assume you know your way around a virtual machine.  I'll be using
+freedos on qemu/kvm with fedora 21 serving as the host.  I won't
+explain the process of installing anything other than the development
+tools we'll need to explore the system.
+</li>
+<li>I'll assume you have some familiarity with c and assembly, although I
+will try to explain most of the code.
+</li>
+<li>You have netcat installed on your host machine.
+</li>
+<li>You're comfortable navigating the command line. 
+</li>
+</ul>
+</div>
+</div>
+
+<div id="outline-container-sec-1-2" class="outline-3">
+<h3 id="sec-1-2">installing dev tools in freedos</h3>
+<div class="outline-text-3" id="text-1-2">
+<p>
+Assuming you've installed freedos on qemu/kvm and enabled networking (on
+both the vm and freedos), we'll proceed to install development tools.
+Download <a href="http://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/devel/c/openwatcom/">openwatcom.exe</a> onto your host machine and transfer the file
+onto the freedos vm.  In order to transfer the file, I initiate a
+listening instance of netcat on freedos:
+</p>
+<div class="org-src-container">
+
+<pre class="src src-sh">nc -bin -listen 1234 &gt; file_name.exe
+</pre>
+</div>
+<p>
+I then proceed to send the file by initiating an instance of netcat on
+the host machine:
+</p>
+<div class="org-src-container">
+
+<pre class="src src-sh">nc -w 3 $ipAddr $port &lt; file_name.exe
+</pre>
+</div>
+<p>
+Finally once the file has been transferred, I execute openwatcom.exe and
+follow the installation instructions.  Once the installation process is
+complete we'll be able to build programs in c and assembly.  This will
+be necessary for exploring freedos's interrupt vector table.
+</p>
+</div>
+</div>
+
+<div id="outline-container-sec-1-3" class="outline-3">
+<h3 id="sec-1-3">quick aside: real mode</h3>
+<div class="outline-text-3" id="text-1-3">
+<p>
+Before we study the interrupt vector table we need to understand a bit
+about the execution environment for processes in freedos.  Processes run
+in a segmented memory model known as real mode.  Here the address for a
+byte, also known as it's logical address, in memory is calculated by
+adding 16-bit segment selector to a 16-bit effective address.  By
+placing an implied zero at the end of the segment selector we are able
+to generate a 20-bit logical address for our bytes (important for
+freedos because it has a 20-bit address space).  You should also note
+that unlike modern operating systems there are no memory protections
+provided by real mode.  This allows user processes to read and write
+kernel data structures.  We'll take advantage of this in order to study
+the interrupt vector table.
+</p>
+</div>
+</div>
+
+<div id="outline-container-sec-1-4" class="outline-3">
+<h3 id="sec-1-4">interrupt vector table</h3>
+<div class="outline-text-3" id="text-1-4">
+<p>
+The interrupt vector table (IVT) serves as the entryway to the kernel
+and is a fundamental system-level data structure in freedos.  The IVT
+essentially maps interrupts to interrupt service routines (ISR).  To any
+Javascript aficionados the IVT is analogous to mapping events
+(interrupts) to callback functions (ISRs).  In real mode, the IVT is
+stored at the bottom of memory (0x00000).  The IVT maps interrupts to
+ISRs by storing the logical address of each ISR sequentially.  So the
+logical address of the first interrupt's ISR is stored from 0x00000 to
+0x00003.  The following four bytes (0x00004 to 0x00007) store the
+address of the ISR for the second interrupt and so on.
+</p>
+</div>
+
+<div id="outline-container-sec-1-4-1" class="outline-4">
+<h4 id="sec-1-4-1">dumping the IVT</h4>
+<div class="outline-text-4" id="text-1-4-1">
+<p>
+In order to dump the contents of the IVT write the following program on
+freedos.
+</p>
+<div class="org-src-container">
+
+<pre class="src src-c">#include &lt;stdio.h&gt;
+
+#define WORD unsigned short
+#define IVT_001_ADDR 0
+#define IVT_255_ADDR 1020
+#define IVT_VECTOR_SZ 4
+
+void main()
+{
+    WORD csAddr;
+    WORD ipAddr;
+    short address;
+    WORD vector;
+    vector = 0x0;
+    for
+    (
+	address=IVT_001_ADDR;
+	address&lt;=IVT_255_ADDR;
+	address=address+IVT_VECTOR_SZ,vector++
+    )
+    {
+       printf("%03d\t%08p\t",vector,address);
+       __asm
+       {
+	    PUSH ES
+	    MOV AX,0
+	    MOV ES,AX
+	    MOV BX,address
+	    MOV AX,ES:[BX]
+	    MOV ipAddr,AX
+	    INC BX
+	    INC BX
+	    MOV AX,ES:[BX]
+	    MOV csAddr,AX
+	    POP ES
+       };
+       printf("[CS:IP]=[%04X,%04X]\n",csAddr,ipAddr);
+    }
+}
+</pre>
+</div>
+
+<p>
+The program essentially prints out the code segment and offset address
+for each interrupt's ISR in the IVT.  By starting a loop at memory
+address 0, continuing up to 1020, and making 4 byte jumps we can print
+out the address of each interrupt's ISR.  The assembly code is equally
+straight forward in that it assigns and finds the code segment and
+offset for each ISR within the loop's 4 byte intervals.
+</p>
+
+<p>
+Compile the program by running.
+</p>
+<div class="org-src-container">
+
+<pre class="src src-sh">wcl dump_ivt.c
+</pre>
+</div>
+<p>
+It should generate an exe file that you can execute.  But if it
+generates a file with an err extension open it up and check for
+compilation errors.  Finally run the program and you should be able to
+see something like below. 
+</p>
+
+
+<div class="figure">
+<p><img src="../img/dump_ivt.png" alt="dump_ivt.png" />
+</p>
+</div>
+</div>
+</div>
+</div>
+<div id="outline-container-sec-1-5" class="outline-3">
+<h3 id="sec-1-5">parting thoughts</h3>
+<div class="outline-text-3" id="text-1-5">
+<p>
+If you've gotten this far then congrats you've managed to deconstruct a
+data structure that's fundamental to the operation of the freedos.  So
+essential is this data structure that if you rewrote the above program
+to zero out the contents of the IVT the OS would crash.  The
+transparency of freedos is both a blessing and a curse.  Although access
+to such an important data structure allows us as programmers to have a
+good idea for what's going on in the system such power can be easily
+used maliciously.  But well save the trip to the dark side for another
+day.
+</p>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>
